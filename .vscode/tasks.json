@@ -1,0 +1,53 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "add-remote",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"remote",
+				"add",
+				"origin",
+				"https://github.com/Vaibhav805/ic-project"
+			],
+			"group": "build"
+		},
+		{
+			"label": "dev-server",
+			"type": "shell",
+			"command": "npm",
+			"args": ["run", "dev"],
+			"isBackground": true,
+			"group": "build"
+		},
+		{
+			"label": "compile-client",
+			"type": "shell",
+			"command": "cl.exe",
+			"args": ["../client.c", "/link", "ws2_32.lib"],
+			"group": "build"
+		},
+		{
+			"label": "compile-server",
+			"type": "shell",
+			"command": "cl.exe",
+			"args": ["../server.c", "/link", "ws2_32.lib"],
+			"group": "build"
+		},
+		{
+			"label": "run-client",
+			"type": "shell",
+			"command": "..\\client.exe",
+			"group": "build",
+			"isBackground": true
+		},
+		{
+			"label": "run-server",
+			"type": "shell",
+			"command": "..\\server.exe",
+			"group": "build",
+			"isBackground": true
+		}
+	]
+}
