@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState, useEffect, ReactNode, ChangeEvent } from 'react';
 
+// what we get from the database
 type StoredMessage = {
   id: number;
   user: string;
@@ -10,6 +11,7 @@ type StoredMessage = {
   recipient?: string;
 };
 
+// what we use in our UI (adds status and isMe flags)
 type ChatMessage = {
   id: number;
   user: string;
@@ -20,99 +22,113 @@ type ChatMessage = {
   recipient?: string;
 };
 
+// hardcoded users for the demo
 const users: string[] = ['A', 'B', 'C', 'D'];
 
 export default function Home(): ReactNode {
-  const [activeUser, setActiveUser] = useState<string>('A');
-  const [message, setMessage] = useState<string>('');
-  const [chat, setChat] = useState<ChatMessage[]>([]);
-  const [sending, setSending] = useState<boolean>(false);
-  const [lastMessageId, setLastMessageId] = useState<number>(-1);
-  const [messageType, setMessageType] = useState<'broadcast' | 'personal'>('broadcast');
-  const [selectedRecipient, setSelectedRecipient] = useState<string>('B');
+  // state stuff
+  const [activeUser, setActiveUser] = useState<string>('A'); // who we are currently pretending to be
+  const [textInput, setTextInput] = useState<string>('');
+  const [messageList, setMessageList] = useState<ChatMessage[]>([]);
+  const [isSending, setIsSending] = useState<boolean>(false);
+  const [lastIdTracker, setLastIdTracker] = useState<number>(-1);
+  
+  // chat mode can be broadcast or personal
+  const [chatMode, setChatMode] = useState<'broadcast' | 'personal'>('broadcast');
+  const [targetUser, setTargetUser] = useState<string>('B');
 
   const userList = useMemo<string[]>(() => users, []);
 
-  // Update recipient when active user changes
+  // make sure we don't accidentally select ourselves as the recipient
   useEffect(() => {
-    const filteredUsers = userList.filter((u) => u !== activeUser);
-    if (filteredUsers.length > 0) {
-      setSelectedRecipient(filteredUsers[0]);
+    let others = userList.filter((u: string) => u !== activeUser);
+    if (others.length > 0) {
+      setTargetUser(others[0]);
     }
   }, [activeUser, userList]);
 
-  // Clear messages on page load
+  // wipe the database clean when the page first loads
+  // useful for presenting so the chat is empty at the start
   useEffect(() => {
-    const clearOnLoad = async (): Promise<void> => {
+    const flushDb = async (): Promise<void> => {
       try {
         await fetch('/api/messages', { method: 'DELETE' });
-        setChat([]);
-        setLastMessageId(-1);
+        setMessageList([]);
+        setLastIdTracker(-1);
       } catch (err) {
-        console.error('Failed to clear messages', err);
+        console.error('uh oh, failed to clean db:', err);
       }
     };
-    clearOnLoad();
+    flushDb();
   }, []);
 
+  // hacky way to get real-time chat (polling)
   useEffect(() => {
-    const fetchMessages = async (): Promise<void> => {
+    const pullNewChats = async (): Promise<void> => {
       try {
-        const res = await fetch(`/api/messages?lastId=${lastMessageId}&user=${activeUser}`);
-        if (!res.ok) return;
+        const response = await fetch(`/api/messages?lastId=${lastIdTracker}&user=${activeUser}`);
+        if (!response.ok) return;
 
-        const data = (await res.json()) as { messages: StoredMessage[] };
+        const data = (await response.json()) as { messages: StoredMessage[] };
+        
         if (data.messages && data.messages.length > 0) {
-          const converted: ChatMessage[] = data.messages.map((msg: StoredMessage) => ({
-            id: msg.id,
-            user: msg.user,
-            text: msg.text,
+          // console.log("got new messages!", data.messages);
+          
+          let parsedMessages: ChatMessage[] = data.messages.map((m: StoredMessage) => ({
+            id: m.id,
+            user: m.user,
+            text: m.text,
             status: 'delivered' as const,
-            isMe: msg.user === activeUser,
-            timestamp: msg.timestamp,
-            recipient: msg.recipient,
+            isMe: m.user === activeUser,
+            timestamp: m.timestamp,
+            recipient: m.recipient,
           }));
 
-          setChat((prev: ChatMessage[]) => {
-            const existingIds = new Set(prev.map((m: ChatMessage) => m.id));
-            const newMessages: ChatMessage[] = converted.filter((m: ChatMessage) => !existingIds.has(m.id));
-            return [...prev, ...newMessages];
+          setMessageList((oldList: ChatMessage[]) => {
+            const seenIds = new Set(oldList.map((m: ChatMessage) => m.id));
+            const fresh = parsedMessages.filter((m: ChatMessage) => !seenIds.has(m.id));
+            return [...oldList, ...fresh];
           });
 
-          setLastMessageId(data.messages[data.messages.length - 1].id);
+          // update our tracker so we don't fetch the same messages again
+          setLastIdTracker(data.messages[data.messages.length - 1].id);
         }
       } catch (err) {
-        console.error('Fetch messages error', err);
+        console.error('error pulling chats', err);
       }
     };
 
-    fetchMessages();
-    const interval = setInterval(fetchMessages, 600);
+    pullNewChats();
+    // run this every 600ms
+    const timer = setInterval(pullNewChats, 600);
+    
     return (): void => {
-      clearInterval(interval);
+      clearInterval(timer);
     };
-  }, [lastMessageId, activeUser]);
+  }, [lastIdTracker, activeUser]);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
+  const onSendClicked = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
 
-    const trimmed = message.trim();
-    if (!trimmed) return;
+    const cleanText = textInput.trim();
+    if (!cleanText) return;
 
-    const tempId = Date.now();
-    const recipientForMessage = messageType === 'personal' ? selectedRecipient : undefined;
-    const pendingMessage: ChatMessage = {
-      id: tempId,
+    // temp id so it shows up instantly on the UI
+    const fakeId = Date.now();
+    const sendTo = chatMode === 'personal' ? targetUser : undefined;
+    
+    const uiMessage: ChatMessage = {
+      id: fakeId,
       user: activeUser,
-      text: trimmed,
+      text: cleanText,
       status: 'pending',
       isMe: true,
       timestamp: Date.now(),
-      recipient: recipientForMessage,
+      recipient: sendTo,
     };
 
-    setChat((prev: ChatMessage[]) => [...prev, pendingMessage]);
-    setSending(true);
+    setMessageList((old: ChatMessage[]) => [...old, uiMessage]);
+    setIsSending(true);
 
     try {
       const res = await fetch('/api/messages', {
@@ -120,38 +136,41 @@ export default function Home(): ReactNode {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user: activeUser,
-          message: trimmed,
-          recipient: messageType === 'personal' ? selectedRecipient : undefined,
+          message: cleanText,
+          recipient: sendTo,
         }),
       });
 
-      if (!res.ok) throw new Error('Bad response');
+      if (!res.ok) throw new Error('server gave bad response');
 
       const result = (await res.json()) as { message: StoredMessage };
-      setChat((prev: ChatMessage[]) =>
-        prev.map((m: ChatMessage) =>
-          m.id === tempId ? { ...m, status: 'delivered' as const, id: result.message.id } : m,
+      
+      // update the pending message to delivered
+      setMessageList((old: ChatMessage[]) =>
+        old.map((m: ChatMessage) =>
+          m.id === fakeId ? { ...m, status: 'delivered' as const, id: result.message.id } : m,
         ),
       );
 
-      setLastMessageId((prev: number) => Math.max(prev, result.message.id));
-    } catch (err) {
-      console.error('Send message error', err);
-      setChat((prev: ChatMessage[]) =>
-        prev.map((m: ChatMessage) =>
-          m.id === tempId ? { ...m, status: 'error' as const } : m,
+      setLastIdTracker((prev: number) => Math.max(prev, result.message.id));
+    } catch (e) {
+      console.error('could not send msg:', e);
+      setMessageList((old: ChatMessage[]) =>
+        old.map((m: ChatMessage) =>
+          m.id === fakeId ? { ...m, status: 'error' as const } : m,
         ),
       );
     } finally {
-      setMessage('');
-      setSending(false);
+      setTextInput('');
+      setIsSending(false);
     }
   };
 
-  const formatStatus = (status: ChatMessage['status']) => {
-    if (status === 'pending') return 'Sending...';
-    if (status === 'delivered') return 'Delivered';
-    if (status === 'error') return 'Failed to send';
+  // helper to get a nice string for UI
+  const getStatusText = (s: ChatMessage['status']) => {
+    if (s === 'pending') return 'Sending...';
+    if (s === 'delivered') return 'Delivered';
+    if (s === 'error') return 'Failed to send';
     return '';
   };
 
@@ -159,7 +178,7 @@ export default function Home(): ReactNode {
     <div className="flex min-h-screen items-center justify-center bg-gray-100 p-4 font-sans text-gray-900 sm:p-6 lg:p-8">
       <div className="flex h-[85vh] w-full max-w-[1000px] flex-row overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-gray-200">
 
-        {/* Left Sidebar - Active User Selection */}
+        {/* Left Sidebar block */}
         <aside className="flex w-20 flex-col border-r border-gray-100 bg-gray-50/80 sm:w-64">
           <div className="flex items-center border-b border-gray-100 p-4 sm:p-6">
             <div className="hidden flex-1 sm:block">
@@ -179,14 +198,14 @@ export default function Home(): ReactNode {
                 key={u}
                 onClick={() => setActiveUser(u)}
                 className={`group flex w-full items-center gap-3 rounded-2xl p-2.5 transition-all duration-200 sm:px-4 sm:py-3 pb-3 ${activeUser === u
-                  ? 'bg-white text-blue-700 shadow-sm ring-1 ring-gray-200'
-                  : 'text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm hover:ring-1 hover:ring-gray-200'
+                    ? 'bg-white text-blue-700 shadow-sm ring-1 ring-gray-200'
+                    : 'text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm hover:ring-1 hover:ring-gray-200'
                   }`}
               >
                 <div
                   className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-all ${activeUser === u
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-200/50'
-                    : 'bg-gray-100 text-gray-600 group-hover:bg-gray-200'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-200/50'
+                      : 'bg-gray-100 text-gray-600 group-hover:bg-gray-200'
                     }`}
                 >
                   {u}
@@ -202,9 +221,8 @@ export default function Home(): ReactNode {
           </div>
         </aside>
 
-        {/* Main Chat Area */}
+        {/* chat area */}
         <main className="flex flex-1 flex-col bg-white">
-          {/* Top Header */}
           <header className="flex flex-col items-start justify-between gap-4 border-b border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:px-6">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-50 text-base font-bold text-blue-600 ring-1 ring-blue-100 sm:h-12 sm:w-12 sm:text-lg">
@@ -221,13 +239,13 @@ export default function Home(): ReactNode {
             <div className="flex w-full items-center gap-2 rounded-full bg-gray-50 px-2 py-1.5 ring-1 ring-gray-200 sm:w-auto">
               <span className="pl-3 text-[13px] font-semibold text-gray-500">To:</span>
               <select
-                value={messageType === 'broadcast' ? 'broadcast' : selectedRecipient}
+                value={chatMode === 'broadcast' ? 'broadcast' : targetUser}
                 onChange={(e: ChangeEvent<HTMLSelectElement>) => {
                   if (e.target.value === 'broadcast') {
-                    setMessageType('broadcast');
+                    setChatMode('broadcast');
                   } else {
-                    setMessageType('personal');
-                    setSelectedRecipient(e.target.value);
+                    setChatMode('personal');
+                    setTargetUser(e.target.value);
                   }
                 }}
                 className="w-full cursor-pointer appearance-none rounded-full border-none bg-transparent py-1.5 pl-2 pr-8 text-[13px] font-semibold text-gray-800 focus:outline-none focus:ring-0 sm:w-auto sm:text-sm"
@@ -245,9 +263,8 @@ export default function Home(): ReactNode {
             </div>
           </header>
 
-          {/* Messages Container */}
           <div className="flex-1 overflow-y-auto bg-gray-50/50 p-4 sm:p-6">
-            {chat.length === 0 ? (
+            {messageList.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center">
                 <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white text-3xl shadow-sm ring-1 ring-gray-100">
                   💬
@@ -257,7 +274,7 @@ export default function Home(): ReactNode {
               </div>
             ) : (
               <div className="flex flex-col gap-5 sm:gap-6">
-                {chat
+                {messageList
                   .filter(
                     (msg) =>
                       !msg.recipient ||
@@ -285,8 +302,8 @@ export default function Home(): ReactNode {
 
                         <div
                           className={`relative rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed shadow-sm sm:rounded-3xl sm:px-5 sm:py-3 sm:text-[15px] ${msg.isMe
-                            ? 'bg-blue-600 text-white rounded-br-sm sm:rounded-br-md shadow-blue-600/10'
-                            : 'bg-white text-gray-800 ring-1 ring-gray-200/60 rounded-bl-sm sm:rounded-bl-md shadow-gray-200/20'
+                              ? 'bg-blue-600 text-white rounded-br-sm sm:rounded-br-md shadow-blue-600/10'
+                              : 'bg-white text-gray-800 ring-1 ring-gray-200/60 rounded-bl-sm sm:rounded-bl-md shadow-gray-200/20'
                             }`}
                         >
                           {msg.text}
@@ -294,7 +311,7 @@ export default function Home(): ReactNode {
 
                         {msg.isMe && (
                           <div className="mt-1 px-2 text-[10px] font-medium text-gray-400 sm:mt-1.5 sm:text-[11px]">
-                            {formatStatus(msg.status)}
+                            {getStatusText(msg.status)}
                           </div>
                         )}
                       </div>
@@ -304,21 +321,20 @@ export default function Home(): ReactNode {
             )}
           </div>
 
-          {/* Chat Input */}
           <div className="border-t border-gray-100 bg-white p-3 sm:p-5">
-            <form onSubmit={handleSubmit} className="flex items-end gap-2 sm:gap-3">
+            <form onSubmit={onSendClicked} className="flex items-end gap-2 sm:gap-3">
               <div className="flex-1 overflow-hidden rounded-3xl bg-gray-50 ring-1 ring-gray-200 transition-shadow focus-within:ring-2 focus-within:ring-blue-500">
                 <input
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
                   placeholder="Type a message..."
-                  disabled={sending}
+                  disabled={isSending}
                   className="max-h-32 min-h-[44px] w-full resize-none border-none bg-transparent px-4 py-3 text-[14px] font-medium outline-none placeholder:text-gray-400 disabled:opacity-50 sm:min-h-[48px] sm:text-[15px]"
                 />
               </div>
               <button
                 type="submit"
-                disabled={sending || !message.trim()}
+                disabled={isSending || !textInput.trim()}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow disabled:pointer-events-none disabled:opacity-40 sm:h-12 sm:w-12"
               >
                 <svg
@@ -337,4 +353,3 @@ export default function Home(): ReactNode {
     </div>
   );
 }
-
