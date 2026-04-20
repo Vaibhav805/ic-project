@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Chat App Software",
   description: "IC Project",
+  icons: {
+    icon: "/react.svg",
+  },
 };
 
 export default function RootLayout({
